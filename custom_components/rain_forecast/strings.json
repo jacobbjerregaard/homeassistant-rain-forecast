@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rain Forecast & History",
+        "description": "Create rain forecast and historical rainfall sensors for a location, powered by the free Open-Meteo API (no API key needed).",
+        "data": {
+          "name": "Name",
+          "latitude": "Latitude",
+          "longitude": "Longitude"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "A rain location with these coordinates is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rain Forecast & History options",
+        "data": {
+          "scan_minutes": "Update interval (minutes)",
+          "forecast_days": "Forecast days",
+          "history_days": "History days",
+          "rain_soon_hours": "\"Rain soon\" look-ahead (hours)",
+          "rain_threshold": "\"Rain soon\" threshold (mm/hour)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_precipitation": { "name": "Current precipitation" },
+      "forecast_today": { "name": "Rain forecast today" },
+      "forecast_tomorrow": { "name": "Rain forecast tomorrow" },
+      "probability_today": { "name": "Rain probability today" },
+      "probability_tomorrow": { "name": "Rain probability tomorrow" },
+      "next_hour": { "name": "Rain next hour" },
+      "next_24h": { "name": "Rain next 24 hours" },
+      "minutes_until_rain": { "name": "Minutes until rain" },
+      "today_so_far": { "name": "Rain today" },
+      "yesterday": { "name": "Rain yesterday" },
+      "last_7_days": { "name": "Rain last 7 days" },
+      "last_30_days": { "name": "Rain last 30 days" },
+      "accumulated": { "name": "Rain accumulated total" }
+    },
+    "binary_sensor": {
+      "rain_soon": { "name": "Rain soon" }
+    }
+  }
+}

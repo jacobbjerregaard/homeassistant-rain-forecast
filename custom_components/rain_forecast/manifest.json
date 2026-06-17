@@ -1,0 +1,13 @@
+{
+  "domain": "rain_forecast",
+  "name": "Rain Forecast & History",
+  "codeowners": ["@jacobbjerregaard"],
+  "config_flow": true,
+  "documentation": "https://github.com/jacobbjerregaard/homeassistant-rain-forecast",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jacobbjerregaard/homeassistant-rain-forecast/issues",
+  "loggers": ["custom_components.rain_forecast"],
+  "requirements": [],
+  "version": "0.1.0"
+}
