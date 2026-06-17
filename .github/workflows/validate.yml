@@ -23,3 +23,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # `brands` requires the domain to be registered in home-assistant/brands,
+          # which only matters for the HACS default store, not custom-repo installs.
+          ignore: brands
