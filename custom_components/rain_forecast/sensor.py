@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     RestoreSensor,
@@ -19,7 +20,9 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
+from .accumulator import RainAccumulator
 from .const import ATTRIBUTION, DOMAIN, MANUFACTURER, MODEL
 from .coordinator import RainForecastCoordinator
 from .parser import RainData
@@ -32,6 +35,8 @@ class RainSensorEntityDescription(SensorEntityDescription):
     """Describes a Rain Forecast sensor and how to read its value."""
 
     value_fn: Callable[[RainData], StateType]
+    #: Set for TOTAL sensors whose accumulation restarts at local midnight.
+    resets_daily: bool = False
 
 
 SENSORS: tuple[RainSensorEntityDescription, ...] = (
@@ -112,7 +117,13 @@ SENSORS: tuple[RainSensorEntityDescription, ...] = (
         translation_key="today_so_far",
         device_class=SensorDeviceClass.PRECIPITATION,
         native_unit_of_measurement=_MM,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        # Deliberately TOTAL rather than TOTAL_INCREASING: this value is
+        # re-derived from Open-Meteo's hourly series on every poll, and the
+        # model revises hours that have already elapsed, so it can legitimately
+        # fall. TOTAL_INCREASING would read each revision as a counter reset and
+        # inflate the long-term statistics. See issue #1.
+        state_class=SensorStateClass.TOTAL,
+        resets_daily=True,
         icon="mdi:weather-rainy",
         value_fn=lambda d: d.today_so_far,
     ),
@@ -198,6 +209,13 @@ class RainSensor(CoordinatorEntity[RainForecastCoordinator], SensorEntity):
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
+    def last_reset(self) -> datetime | None:
+        """Return local midnight for sensors that start over each day."""
+        if not self.entity_description.resets_daily:
+            return None
+        return dt_util.start_of_local_day()
+
+    @property
     def extra_state_attributes(self) -> dict | None:
         """Expose the daily forecast on the today sensor for charts/templates."""
         if (
@@ -234,23 +252,21 @@ class RainAccumulatedSensor(
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_accumulated"
         self._attr_device_info = _device_info(entry)
-        self._total = 0.0
-        self._last_value: float | None = None
-        self._last_date = None
+        self._accumulator = RainAccumulator()
 
     async def async_added_to_hass(self) -> None:
         """Restore the running total and seed the baseline."""
         await super().async_added_to_hass()
+        total = 0.0
         last = await self.async_get_last_sensor_data()
         if last is not None and last.native_value is not None:
             try:
-                self._total = float(last.native_value)
+                total = float(last.native_value)
             except (TypeError, ValueError):
-                self._total = 0.0
+                total = 0.0
         # Re-baseline after a restart so the first refresh doesn't double count.
-        self._last_value = None
-        self._last_date = None
-        self._attr_native_value = round(self._total, 2)
+        self._accumulator.reset_baseline(total)
+        self._attr_native_value = round(total, 2)
         self._accumulate()
 
     @callback
@@ -262,28 +278,11 @@ class RainAccumulatedSensor(
     def _accumulate(self) -> None:
         """Fold today's rainfall-so-far into the running total."""
         data = self.coordinator.data
-        if data is None or data.today_so_far is None:
+        if data is None:
             return
-
-        current = data.today_so_far
         # The first entry of the daily forecast is always "today" in local time,
         # so we use it to detect a day rollover without recomputing the date here.
-        today = data.daily_forecast[0]["date"] if data.daily_forecast else None
-
-        if self._last_date is None:
-            # First sample after start/restart: baseline only, no addition.
-            self._last_date = today
-            self._last_value = current
-        elif today == self._last_date:
-            delta = current - (self._last_value or 0.0)
-            if delta > 0:
-                self._total += delta
-            self._last_value = current
-        else:
-            # New day: the previous day's tail since our last poll is lost, but
-            # today's accumulation is added in full.
-            self._total += max(0.0, current)
-            self._last_date = today
-            self._last_value = current
-
-        self._attr_native_value = round(self._total, 2)
+        date = data.daily_forecast[0]["date"] if data.daily_forecast else None
+        self._attr_native_value = round(
+            self._accumulator.add(data.today_so_far, date), 2
+        )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
@@ -30,6 +30,25 @@ from .open_meteo import OpenMeteoClient, OpenMeteoError
 from .parser import RainData, build_rain_data
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _local_now(forecast: dict) -> datetime:
+    """Return "now" as a naive datetime in the *monitored location's* timezone.
+
+    Open-Meteo is queried with ``timezone=auto``, so every timestamp it returns
+    is local to the coordinates -- which is not necessarily HA's own timezone.
+    Using HA's local time here would skew every window by the offset between the
+    two (a Copenhagen instance watching New York would count six hours of
+    forecast as rain that had already fallen), so we rebuild "now" from the
+    ``utc_offset_seconds`` the response carries and drop the tzinfo to match.
+    """
+    offset = forecast.get("utc_offset_seconds")
+    if isinstance(offset, (int, float)) and not isinstance(offset, bool):
+        return (dt_util.utcnow() + timedelta(seconds=offset)).replace(tzinfo=None)
+    # No offset in the payload: HA's local time is the best guess available, and
+    # it is exactly right for the common case of monitoring your own location.
+    _LOGGER.debug("No utc_offset_seconds in payload; falling back to HA local time")
+    return dt_util.now().replace(tzinfo=None)
 
 
 class RainForecastCoordinator(DataUpdateCoordinator[RainData]):
@@ -77,9 +96,7 @@ class RainForecastCoordinator(DataUpdateCoordinator[RainData]):
         except OpenMeteoError as err:
             raise UpdateFailed(f"Error fetching forecast: {err}") from err
 
-        # Open-Meteo returns naive local timestamps (timezone=auto); align our
-        # "now" to HA's configured local time and drop the tzinfo to match.
-        now = dt_util.now().replace(tzinfo=None)
+        now = _local_now(forecast)
         today = now.date()
 
         if self._archive_day != today:
