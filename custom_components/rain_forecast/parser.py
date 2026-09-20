@@ -61,19 +61,37 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _as_float(value: Any) -> float | None:
+    """Coerce to float, tolerating ``None``/garbage.
+
+    Every millimetre figure is pushed through this on the way in, so a
+    malformed payload degrades to ``None`` instead of raising ``TypeError``
+    out of the coordinator as an unhandled traceback.
+    """
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _window_sum(
     actual: dict[str, float], end: datetime, days: int
 ) -> float | None:
-    """Sum the rainfall for the ``days`` ending on ``end`` (inclusive)."""
+    """Sum the rainfall for the ``days`` ending on ``end`` (inclusive).
+
+    Returns ``None`` unless *every* day in the window is present. A partial sum
+    is indistinguishable from a genuinely dry spell, so a short archive (or a
+    failed archive fetch) would otherwise report, say, seven days of rain under
+    a "last 30 days" label. Unavailable is the honest answer.
+    """
     total = 0.0
-    found = False
     for offset in range(days):
         key = (end.date() - timedelta(days=offset)).isoformat()
         value = actual.get(key)
-        if value is not None:
-            total += value
-            found = True
-    return total if found else None
+        if value is None:
+            return None
+        total += value
+    return total
 
 
 def build_rain_data(
@@ -106,9 +124,9 @@ def build_rain_data(
     daily_by_date: dict[str, dict[str, Any]] = {}
     for i, date_str in enumerate(d_dates):
         daily_by_date[date_str] = {
-            "precipitation_sum": _get(d_psum, i),
+            "precipitation_sum": _as_float(_get(d_psum, i)),
             "precipitation_probability_max": _get(d_prob, i),
-            "rain_sum": _get(d_rain, i),
+            "rain_sum": _as_float(_get(d_rain, i)),
             "precipitation_hours": _get(d_hours, i),
         }
 
@@ -156,13 +174,27 @@ def build_rain_data(
             moment = datetime.fromisoformat(time_str)
         except ValueError:
             continue
-        precip = _get(h_precip, i) or 0.0
+        precip = _as_float(_get(h_precip, i)) or 0.0
 
-        if moment.date() == today and moment <= now:
-            today_so_far += precip
+        # Open-Meteo stamps hourly precipitation with the END of the hour it
+        # covers ("sum of the preceding hour"), so an hour belongs to the day of
+        # ``moment - 1h``: 00:00 is the tail of the previous day, and today runs
+        # from the 01:00 stamp through tomorrow's 00:00 one.
+        if (moment - timedelta(hours=1)).date() == today:
+            # Report 0.0 rather than "unknown" during the first hour of the
+            # day, when today has hourly coverage but no hour has elapsed yet.
             has_today = True
+            if moment <= now:
+                today_so_far += precip
 
         if moment >= now:
+            # Both look-ahead windows start at the beginning of the hour that
+            # ``now`` falls in, not at ``now`` itself, because an hourly stamp
+            # is the smallest slice the API offers and the one straddling
+            # ``now`` is partly elapsed. They are therefore shifted up to 59
+            # minutes into the past. That is inherent to hourly resolution --
+            # do not "fix" it here without also revisiting the day window and
+            # the onset calculation below, which follow the same convention.
             if next_hour is None:
                 next_hour = precip
             if moment < horizon:
@@ -173,7 +205,12 @@ def build_rain_data(
                 and moment <= soon_limit
                 and precip >= rain_threshold
             ):
-                minutes_until = max(0, int((moment - now).total_seconds() // 60))
+                # ``moment`` is the END of the rainy hour, so the rain may start
+                # anywhere in the preceding hour -- possibly already. Report the
+                # earliest possible onset rather than the latest, so "rain in 30
+                # minutes" never means "it may be raining right now".
+                onset = max(now, moment - timedelta(hours=1))
+                minutes_until = max(0, int((onset - now).total_seconds() // 60))
                 soon_amount = precip
 
     data.next_hour = _round(next_hour)
@@ -191,7 +228,7 @@ def build_rain_data(
         a_dates: list[str] = a_daily.get("time") or []
         a_psum = a_daily.get("precipitation_sum") or []
         for i, date_str in enumerate(a_dates):
-            value = _get(a_psum, i)
+            value = _as_float(_get(a_psum, i))
             if value is not None:
                 actual[date_str] = value
 

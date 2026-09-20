@@ -99,11 +99,21 @@ def test_next_windows():
     assert data.next_24h == 2.0  # only the 14:00 spike falls in the window
 
 
-def test_rain_soon():
+def test_rain_soon_reports_the_earliest_possible_onset():
+    """The 14:00 stamp covers 13:00-14:00, so rain may start in 60 min, not 120."""
     data = _data()
     assert data.rain_soon is True
-    assert data.minutes_until_rain == 120
+    assert data.minutes_until_rain == 60
     assert data.rain_soon_amount == 2.0
+
+
+def test_rain_soon_is_zero_minutes_when_the_hour_is_already_open():
+    """At 13:30 the rainy 14:00 window has already started."""
+    data = build_rain_data(
+        _build_forecast(), _build_archive(), datetime(2026, 6, 17, 13, 30), 2, 0.1
+    )
+    assert data.rain_soon is True
+    assert data.minutes_until_rain == 0
 
 
 def test_history_prefers_forecast_over_archive():
@@ -113,6 +123,31 @@ def test_history_prefers_forecast_over_archive():
     assert data.last_7_days == 10.5
 
 
+def test_incomplete_window_is_unavailable_rather_than_partial():
+    """Only 7 days of data exist, so a 30-day total would be misleading."""
+    data = _data()
+    assert data.last_30_days is None
+
+
+def test_window_is_unavailable_when_a_day_is_missing_in_the_middle():
+    archive = _build_archive()
+    idx = archive["daily"]["time"].index("2026-06-13")
+    archive["daily"]["precipitation_sum"][idx] = None
+    data = build_rain_data(_build_forecast(), archive, NOW, 2, 0.1)
+    assert data.last_7_days is None
+
+
+def test_malformed_values_degrade_to_none_instead_of_raising():
+    forecast = _build_forecast()
+    idx = forecast["hourly"]["time"].index("2026-06-17T10:00")
+    forecast["hourly"]["precipitation"][idx] = "not-a-number"
+    archive = _build_archive()
+    archive["daily"]["precipitation_sum"][0] = "junk"
+    data = build_rain_data(forecast, archive, NOW, 2, 0.1)
+    assert data.today_so_far == 0.5  # the 10:00 garbage is dropped, 11:00 remains
+    assert data.last_7_days is None  # 2026-06-11 is now missing
+
+
 def test_rain_soon_threshold_not_met():
     forecast = _build_forecast()
     idx = forecast["hourly"]["time"].index("2026-06-17T14:00")
@@ -120,3 +155,21 @@ def test_rain_soon_threshold_not_met():
     data = build_rain_data(forecast, _build_archive(), NOW, 2, 0.1)
     assert data.rain_soon is False
     assert data.minutes_until_rain is None
+
+
+def test_midnight_stamp_belongs_to_the_previous_day():
+    """The 00:00 stamp covers 23:00-00:00, so it is yesterday's rain."""
+    forecast = _build_forecast()
+    idx = forecast["hourly"]["time"].index("2026-06-17T00:00")
+    forecast["hourly"]["precipitation"][idx] = 4.0
+    data = build_rain_data(forecast, _build_archive(), NOW, 2, 0.1)
+    assert data.today_so_far == 1.5
+
+
+def test_today_is_zero_before_the_first_hour_has_elapsed():
+    """Just after midnight no hour of the new day is complete yet."""
+    forecast = _build_forecast()
+    data = build_rain_data(
+        forecast, _build_archive(), datetime(2026, 6, 18, 0, 30), 2, 0.1
+    )
+    assert data.today_so_far == 0.0

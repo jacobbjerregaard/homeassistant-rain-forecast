@@ -33,9 +33,9 @@ All entities are grouped under one device per configured location.
 | Rain probability tomorrow | Max chance of precipitation tomorrow | % |
 | Rain next hour | Forecast precipitation in the next hour | mm |
 | Rain next 24 hours | Forecast precipitation over the next 24 hours | mm |
-| Minutes until rain | Minutes until the next rain in the look-ahead window | min |
+| Minutes until rain | Minutes until rain could start, in the look-ahead window | min |
 | Current precipitation | Precipitation reported for the current period | mm |
-| Rain today | Actual rainfall so far today | mm |
+| Rain today | Actual rainfall so far today (revisable, see below) | mm |
 | Rain yesterday | Actual rainfall yesterday | mm |
 | Rain last 7 days | Rolling 7-day actual rainfall | mm |
 | Rain last 30 days | Rolling 30-day actual rainfall (archive-backed) | mm |
@@ -101,10 +101,37 @@ Open the integration's **Configure** dialog to tune:
 - **Rain accumulated total** is computed locally on every update and persisted via
   Home Assistant's restore state, so it keeps counting even if the archive is
   temporarily unavailable.
+- **Rolling windows** ("last 7 days", "last 30 days") report `unknown` unless every
+  day in the window is available, rather than quietly summing the days they do
+  have — a partial total is indistinguishable from a dry spell. Set *History days*
+  to at least 30 if you want the 30-day sensor populated.
+- **Rain today** is re-derived from Open-Meteo's hourly series on every poll and
+  resets at local midnight. Because the model revises hours that have already
+  elapsed, the figure can move *down* as well as up during the day — it is a
+  best current estimate, not a rain-gauge reading. It therefore uses the `total`
+  state class with a daily `last_reset`, which lets Home Assistant record those
+  revisions correctly instead of mistaking them for a counter reset. If you need
+  a value that only ever climbs, use **Rain accumulated total**.
 
 The rainfall total sensors use the `total`/`total_increasing` state class, so they
 can be added to the **Energy / utility** style dashboards and `utility_meter`
 helpers.
+
+## Timing and resolution
+
+Open-Meteo's hourly precipitation is the *sum of the preceding hour*, so a value
+stamped `13:00` covers 12:00–13:00. Two consequences:
+
+- **Minutes until rain** reports the earliest moment rain could start — the
+  beginning of the first rainy hour — so it never tells you rain is 45 minutes
+  away when it may already be falling.
+- **Rain next hour** and **Rain next 24 hours** are aligned to hour boundaries, so
+  their windows can start up to 59 minutes in the past. Hourly data offers no
+  finer resolution.
+
+All day boundaries follow the **monitored location's** timezone, taken from the
+API response, not the Home Assistant instance's — so monitoring a location in
+another timezone gives correct daily totals.
 
 ## Data source & attribution
 
